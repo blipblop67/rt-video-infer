@@ -7,6 +7,8 @@
 
 #include <nvtx3/nvToolsExt.h>
 
+#include "stats.h"
+
 // Per-batch stage timings (a batch is one frame from each stream that had one ready).
 // CPU stages use steady_clock, GPU stages use CUDA events. With one stream, batch == frame.
 enum Stage {
@@ -44,8 +46,7 @@ class Profiler {
   bool write_json(const std::string& path, const std::string& title) const;
 
  private:
-  struct Stat { double mean = 0, p50 = 0, p90 = 0, p99 = 0, max = 0; size_t n = 0; };
-  Stat stat(int stage) const;
+  Summary stat(int stage) const;
   double fps() const;
 
   uint64_t warmup_;

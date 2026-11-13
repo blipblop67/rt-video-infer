@@ -7,46 +7,8 @@
 #include <gst/video/video.h>
 #include <nvbufsurface.h>
 
-namespace {
+#include "source_spec.h"
 
-bool starts_with(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }
-
-// Everything up to (and including) an element that nvvidconv can consume.
-std::string source_head(const std::string& spec) {
-  if (spec == "test")
-    return "videotestsrc is-live=true pattern=ball ! "
-           "video/x-raw,width=1280,height=720,framerate=30/1 ! nvvidconv";
-  if (starts_with(spec, "file:"))  // H.264 MP4 decoded on NVDEC
-    return "filesrc location=\"" + spec.substr(5) +
-           "\" ! qtdemux ! queue ! h264parse ! nvv4l2decoder ! nvvidconv";
-  if (starts_with(spec, "image:"))  // still image replayed as a 30 fps live stream
-    return "filesrc location=\"" + spec.substr(6) +
-           "\" ! jpegdec ! videoconvert ! video/x-raw,format=I420 ! "
-           "imagefreeze is-live=true ! video/x-raw,framerate=30/1 ! nvvidconv";
-  if (starts_with(spec, "csi:"))
-    return "nvarguscamerasrc sensor-id=" + spec.substr(4) +
-           " ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1 ! nvvidconv";
-  if (starts_with(spec, "usb:"))  // raw YUY2; 30 fps pins UVC cameras to a mode that sustains it
-    return "v4l2src device=" + spec.substr(4) + " ! video/x-raw,framerate=30/1 ! nvvidconv";
-  if (starts_with(spec, "mjpeg:")) {  // mjpeg:/dev/video0[@WxH], decoded on the hardware JPEG engine
-    std::string dev = spec.substr(6), w = "1280", h = "720";
-    const size_t at = dev.find('@'), x = dev.find('x', at == std::string::npos ? 0 : at);
-    if (at != std::string::npos && x != std::string::npos) {
-      w = dev.substr(at + 1, x - at - 1);
-      h = dev.substr(x + 1);
-      dev = dev.substr(0, at);
-    }
-    return "v4l2src device=" + dev + " ! image/jpeg,width=" + w + ",height=" + h +
-           ",framerate=30/1 ! nvv4l2decoder mjpeg=1 ! nvvidconv";
-  }
-  if (starts_with(spec, "rtsp:"))
-    return "rtspsrc location=\"" + spec + "\" latency=100 ! rtph264depay ! h264parse ! "
-           "nvv4l2decoder ! nvvidconv";
-  if (starts_with(spec, "pipeline:")) return spec.substr(9);
-  return {};
-}
-
-}  // namespace
 
 GstSource::~GstSource() { close(); }
 
@@ -69,11 +31,7 @@ bool GstSource::open(const SourceConfig& cfg) {
     fprintf(stderr, "unknown source spec '%s'\n", cfg.spec.c_str());
     return false;
   }
-  const char* mem = cfg.mem == MemMode::kNvmm ? "(memory:NVMM)" : "";
-  // max-buffers=1 drop=true: always infer on the newest frame, never build a backlog.
-  desc_ = head + " ! video/x-raw" + mem + ",format=RGBA,width=" + std::to_string(cfg.width) +
-          ",height=" + std::to_string(cfg.height) +
-          " ! appsink name=sink max-buffers=1 drop=true sync=" + (cfg.sync ? "true" : "false");
+  desc_ = pipeline_description(head, cfg.mem == MemMode::kNvmm, cfg.width, cfg.height, cfg.sync);
 
   GError* err = nullptr;
   pipeline_ = gst_parse_launch(desc_.c_str(), &err);

@@ -112,6 +112,8 @@ bool TrtEngine::load(const std::string& path) {
     cudaStreamDestroy(s);
   }
 
+  for (const auto& p : profiles_) ranges_.push_back({p.min, p.max});
+
   // Resolve the output shape at max batch to size the buffers once.
   Profile& top = profiles_[profile_for(max_batch_)];
   nvinfer1::Dims full = in_dims_;
@@ -132,17 +134,12 @@ bool TrtEngine::load(const std::string& path) {
   return true;
 }
 
-int TrtEngine::profile_for(int batch) const {
-  int best = -1;
-  for (int i = 0; i < int(profiles_.size()); ++i)
-    if (profiles_[i].max >= batch && (best < 0 || profiles_[i].max < profiles_[best].max)) best = i;
-  return best;
-}
+int TrtEngine::profile_for(int batch) const { return pick_profile(ranges_, batch); }
 
 int TrtEngine::rows_for(int batch) const {
   if (!dynamic_) return max_batch_;
   const int p = profile_for(batch);
-  return p < 0 ? -1 : std::max(batch, profiles_[p].min);  // pad up if a profile starts above it
+  return p < 0 ? -1 : rows_for_profile(ranges_[p], batch);
 }
 
 std::string TrtEngine::profiles_desc() const {

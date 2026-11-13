@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "batch_plan.h"
+
 // Single-input / single-output TensorRT 10 engine wrapper (enqueueV3, named tensors).
 // Batch is dim 0. A static engine always runs its fixed batch (unused rows are ignored).
 // A dynamic engine may carry several optimization profiles (e.g. [1], [2..4], [5..8]); each gets
@@ -44,6 +46,7 @@ class TrtEngine {
   std::unique_ptr<nvinfer1::IRuntime> runtime_;
   std::unique_ptr<nvinfer1::ICudaEngine> engine_;
   std::vector<Profile> profiles_;
+  std::vector<BatchRange> ranges_;  // profiles_[i].min/max, for pick_profile
   std::string in_name_, out_name_;
   nvinfer1::Dims in_dims_{};
   int in_w_ = 0, in_h_ = 0;

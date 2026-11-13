@@ -29,24 +29,12 @@ void Profiler::finish(uint64_t arrived_now) {
   arrived_end_ = arrived_now;
 }
 
-Profiler::Stat Profiler::stat(int stage) const {
+Summary Profiler::stat(int stage) const {
   std::vector<double> v;
   v.reserve(records_.size());
   for (const auto& r : records_)
     if (r.ms[stage] >= 0) v.push_back(r.ms[stage]);
-  Stat s;
-  s.n = v.size();
-  if (v.empty()) return s;
-  std::sort(v.begin(), v.end());
-  auto pct = [&](double p) { return v[std::min(v.size() - 1, size_t(p * (v.size() - 1) + 0.5))]; };
-  double sum = 0;
-  for (double x : v) sum += x;
-  s.mean = sum / v.size();
-  s.p50 = pct(0.50);
-  s.p90 = pct(0.90);
-  s.p99 = pct(0.99);
-  s.max = v.back();
-  return s;
+  return summarize(std::move(v));
 }
 
 double Profiler::fps() const {
@@ -67,13 +55,13 @@ void Profiler::print_summary(const std::string& title) const {
   printf("%-16s %8s %8s %8s %8s %8s   (ms per batch)\n", "stage", "mean", "p50", "p90", "p99",
          "max");
   for (int s = 0; s < kNumStages; ++s) {
-    const Stat st = stat(s);
+    const Summary st = stat(s);
     if (!st.n) continue;
     printf("%-16s %8.3f %8.3f %8.3f %8.3f %8.3f\n", kNames[s], st.mean, st.p50, st.p90, st.p99,
            st.max);
   }
   // Process time bounds the achievable frame rate when the GPU pipeline is serialized.
-  const Stat p = stat(kProcess), inf = stat(kInfer);
+  const Summary p = stat(kProcess), inf = stat(kInfer);
   const double per_batch = records_.empty() ? 1.0 : double(frames_) / records_.size();
   if (inf.n) printf("infer per frame: %.3f ms\n", inf.mean / per_batch);
   if (p.n)
@@ -106,7 +94,7 @@ bool Profiler::write_json(const std::string& path, const std::string& title) con
           (unsigned long)arrived, (unsigned long)(arrived > frames_ ? arrived - frames_ : 0));
   bool first = true;
   for (int s = 0; s < kNumStages; ++s) {
-    const Stat st = stat(s);
+    const Summary st = stat(s);
     if (!st.n) continue;
     fprintf(f, "%s    \"%s\": {\"mean\": %.4f, \"p50\": %.4f, \"p90\": %.4f, \"p99\": %.4f, "
                "\"max\": %.4f}",

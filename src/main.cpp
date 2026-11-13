@@ -22,6 +22,7 @@
 #include "gst_source.h"
 #include "preprocess.h"
 #include "profiler.h"
+#include "topk.h"
 #include "trt_engine.h"
 
 #define CUDA_CHECK(x)                                                              \
@@ -344,15 +345,8 @@ int main(int argc, char** argv) {
       t = std::chrono::steady_clock::now();
       const size_t k = engine.output_count();
       for (int j = 0; j < n; ++j) {
-        Item& it = items[j];
-        std::fill(std::begin(it.cls), std::end(it.cls), -1);
-        std::fill(std::begin(it.score), std::end(it.score), -1e30f);
-        for (size_t i = 0; i < k; ++i) {  // insertion into a 3-slot top list
-          float v = read_out(h_out, j * k + i, engine.output_is_half());
-          int c = int(i);
-          for (int r = 0; r < 3; ++r)
-            if (v > it.score[r]) std::swap(v, it.score[r]), std::swap(c, it.cls[r]);
-        }
+        top_k(k, [&](size_t i) { return read_out(h_out, j * k + i, engine.output_is_half()); },
+              items[j].cls, items[j].score);
       }
       rec.ms[kPostprocess] = ms_since(t);
       rec.top_class = items[0].cls[0];
