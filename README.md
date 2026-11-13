@@ -4,6 +4,13 @@ Real-time C++ video inference on NVIDIA Jetson: **GStreamer (NVDEC + VIC) → CU
 TensorRT 10**, with per-stage profiling. Handles one or many streams, batched into one inference
 per iteration.
 
+![Live USB camera classification on a Jetson Orin Nano Super](assets/demo_usb_camera.gif)
+
+*Live from a USB camera (Logitech Brio 100, 1280×720 MJPEG decoded on the hardware JPEG engine):
+top-3 ImageNet classes, TensorRT inference time, and camera-to-result latency for each frame.
+Full-quality clip: [assets/demo_usb_camera.mp4](assets/demo_usb_camera.mp4). Recorded with
+`scripts/record_demo.sh`.*
+
 ```
 source ─► nvv4l2decoder (NVDEC) ─► nvvidconv (VIC: NV12→RGBA, scale to 224×224) ─► appsink(drop, max-buffers=1)
                                                                                      │
@@ -66,7 +73,14 @@ sharing a single activation buffer because they run one after another on the sam
 runs each batch on the profile with the smallest upper bound that fits.
 
 Sources: `test` (videotestsrc 720p30), `file:clip.mp4` (H.264), `image:pic.jpg`, `csi:0`
-(nvarguscamerasrc), `usb:/dev/video0`, `rtsp://…`, or `pipeline:'<elements ending in nvvidconv>'`.
+(nvarguscamerasrc), `usb:/dev/video0` (raw YUY2 at 30 FPS), `mjpeg:/dev/video0[@1280x720]` (USB
+camera MJPEG, decoded on the hardware JPEG engine), `rtsp://…`, or
+`pipeline:'<elements ending in nvvidconv>'`.
+
+With USB cameras, prefer `mjpeg:`. UVC cameras usually offer 30 FPS raw only at low resolutions.
+Unconstrained raw caps made the Brio 100 pick 1080p at 5 FPS, with 222 ms latency. With `usb:`
+(640×480 raw) or `mjpeg:` (720p or 1080p), it runs at 30 FPS with about 56 ms from camera to
+result, of which inference is 2.3 ms.
 Run `./build/rtinfer` with no arguments to see every option.
 
 The engine's input size decides the VIC output size. The engine's I/O tensor types (fp32 or
@@ -90,6 +104,21 @@ scripts/run_profiled.sh nvmm_rt  --engine models/ResNet50_fp16.engine --source f
 NSYS=1 scripts/run_profiled.sh trace --engine models/ResNet50_fp16.engine --source file:media/test_1080p.mp4 --frames 200 --no-sync
 nsys stats --report nvtx_sum reports/trace.nsys-rep
 ```
+
+## Recording a demo
+
+```bash
+scripts/record_demo.sh /dev/video0 10 demo_usb_camera      # 10 s from the camera → assets/demo_usb_camera.{gif,mp4}
+```
+
+The script runs rtinfer on a `pipeline:` source in which a `tee` records exactly the frames being
+classified: MJPEG is decoded on the hardware JPEG engine, scaled by VIC, and encoded with x264.
+`--pred-csv` stores the top 3 classes with each frame's PTS, and `scripts/render_demo.py`
+matches them to the recorded frames by timestamp. It overlays the predictions and timings and
+writes an MP4 plus a GIF at 480 px and 10 FPS. GitHub plays GIFs inline in a README but not
+MP4s stored in the repo, so the README embeds the GIF and links the MP4. When rtinfer stops, it
+sends end-of-stream (EOS) before shutting the pipeline down, so the recording branch's MP4 is
+finalized properly.
 
 `e2e latency` is (pipeline clock now) − (buffer running time), measured once the result is ready.
 For live sources (camera, RTSP, `test`, `image:`) this is capture-to-result latency. For files
@@ -212,6 +241,7 @@ src/preprocess.cu  RGBA→NCHW normalize kernel (fp32/fp16)
 src/trt_engine.*   TensorRT 10 engine loader (named tensors, fixed batch or multi-profile dynamic batch)
 src/profiler.*     per-stage stats, CSV/JSON, NVTX helpers
 src/main.cpp       CLI, multi-stream batch gatherer, per-batch loop
-scripts/           engine builds (trtexec + dynamic-batch Python builder), test clips,
+assets/            README demo (GIF inline, MP4 full quality)
+scripts/           engine builds (trtexec + dynamic-batch Python builder), test clips, demo recorder/renderer,
                    tegrastats/nsys wrapper, benchmark matrices
 ```

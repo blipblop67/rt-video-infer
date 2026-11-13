@@ -26,8 +26,19 @@ std::string source_head(const std::string& spec) {
   if (starts_with(spec, "csi:"))
     return "nvarguscamerasrc sensor-id=" + spec.substr(4) +
            " ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1 ! nvvidconv";
-  if (starts_with(spec, "usb:"))
-    return "v4l2src device=" + spec.substr(4) + " ! video/x-raw ! nvvidconv";
+  if (starts_with(spec, "usb:"))  // raw YUY2; 30 fps pins UVC cameras to a mode that sustains it
+    return "v4l2src device=" + spec.substr(4) + " ! video/x-raw,framerate=30/1 ! nvvidconv";
+  if (starts_with(spec, "mjpeg:")) {  // mjpeg:/dev/video0[@WxH], decoded on the hardware JPEG engine
+    std::string dev = spec.substr(6), w = "1280", h = "720";
+    const size_t at = dev.find('@'), x = dev.find('x', at == std::string::npos ? 0 : at);
+    if (at != std::string::npos && x != std::string::npos) {
+      w = dev.substr(at + 1, x - at - 1);
+      h = dev.substr(x + 1);
+      dev = dev.substr(0, at);
+    }
+    return "v4l2src device=" + dev + " ! image/jpeg,width=" + w + ",height=" + h +
+           ",framerate=30/1 ! nvv4l2decoder mjpeg=1 ! nvvidconv";
+  }
   if (starts_with(spec, "rtsp:"))
     return "rtspsrc location=\"" + spec + "\" latency=100 ! rtph264depay ! h264parse ! "
            "nvv4l2decoder ! nvvidconv";
@@ -95,6 +106,13 @@ bool GstSource::open(const SourceConfig& cfg) {
 void GstSource::close() {
   clear_egl_cache();
   if (pipeline_) {
+    // Stopping mid-stream: send EOS and give it a moment to drain, so muxers in custom pipelines
+    // (e.g. a tee'd recording branch) finalize their files instead of leaving them truncated.
+    if (!eos_ && !error_ && gst_element_send_event(pipeline_, gst_event_new_eos())) {
+      if (GstMessage* m = gst_bus_timed_pop_filtered(
+              bus_, 3 * GST_SECOND, static_cast<GstMessageType>(GST_MESSAGE_EOS | GST_MESSAGE_ERROR)))
+        gst_message_unref(m);
+    }
     gst_element_set_state(pipeline_, GST_STATE_NULL);
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;

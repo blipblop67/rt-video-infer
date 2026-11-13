@@ -55,6 +55,7 @@ void usage(const char* argv0) {
   printf(
       "usage: %s --engine model.engine [options]\n"
       "  --source SPEC     test | file:clip.mp4 | image:pic.jpg | csi:0 | usb:/dev/video0 |\n"
+      "                    mjpeg:/dev/video0[@1280x720] (hardware JPEG decode) |\n"
       "                    rtsp://... | pipeline:'<gst elements ending in nvvidconv>'  (test)\n"
       "                    repeat --source for several streams\n"
       "  --streams N       run N copies of a single --source                        (1)\n"
@@ -240,7 +241,7 @@ int main(int argc, char** argv) {
   };
 
   FILE* pred = args.pred_csv.empty() ? nullptr : fopen(args.pred_csv.c_str(), "w");
-  if (pred) fprintf(pred, "batch_index,stream,pts_ns,class,score\n");
+  if (pred) fprintf(pred, "batch_index,stream,pts_ns,class,score,class2,score2,class3,score3\n");
 
   std::string title = nstreams > 1 && std::all_of(args.specs.begin(), args.specs.end(),
                                                   [&](auto& s) { return s == args.specs[0]; })
@@ -260,8 +261,8 @@ int main(int argc, char** argv) {
     int stream;
     GstSample* sample;
     FrameView f;
-    int cls;
-    float score;
+    int cls[3];  // top-3, best first
+    float score[3];
   };
   std::vector<GstSample*> got(nstreams);
   std::vector<Item> items;
@@ -290,7 +291,7 @@ int main(int argc, char** argv) {
     const auto t_proc = std::chrono::steady_clock::now();
     items.clear();
     for (int i = 0; i < nstreams; ++i)
-      if (got[i]) items.push_back(Item{i, got[i], {}, -1, 0});
+      if (got[i]) items.push_back(Item{i, got[i], {}, {-1, -1, -1}, {0, 0, 0}});
     {
       NvtxRange r("map");
       t = std::chrono::steady_clock::now();
@@ -343,18 +344,19 @@ int main(int argc, char** argv) {
       t = std::chrono::steady_clock::now();
       const size_t k = engine.output_count();
       for (int j = 0; j < n; ++j) {
-        int best = 0;
-        float best_v = -1e30f;
-        for (size_t i = 0; i < k; ++i) {
-          const float v = read_out(h_out, j * k + i, engine.output_is_half());
-          if (v > best_v) best_v = v, best = int(i);
+        Item& it = items[j];
+        std::fill(std::begin(it.cls), std::end(it.cls), -1);
+        std::fill(std::begin(it.score), std::end(it.score), -1e30f);
+        for (size_t i = 0; i < k; ++i) {  // insertion into a 3-slot top list
+          float v = read_out(h_out, j * k + i, engine.output_is_half());
+          int c = int(i);
+          for (int r = 0; r < 3; ++r)
+            if (v > it.score[r]) std::swap(v, it.score[r]), std::swap(c, it.cls[r]);
         }
-        items[j].cls = best;
-        items[j].score = best_v;
       }
       rec.ms[kPostprocess] = ms_since(t);
-      rec.top_class = items[0].cls;
-      rec.top_score = items[0].score;
+      rec.top_class = items[0].cls[0];
+      rec.top_score = items[0].score[0];
     }
     if (args.src.sync && ok) {
       double worst = -1;
@@ -364,8 +366,9 @@ int main(int argc, char** argv) {
     if (pred && ok)
       for (auto& it : items) {
         const GstBuffer* b = gst_sample_get_buffer(it.sample);
-        fprintf(pred, "%lu,%d,%ld,%d,%.6f\n", (unsigned long)idx, it.stream,
-                GST_BUFFER_PTS_IS_VALID(b) ? (long)GST_BUFFER_PTS(b) : -1L, it.cls, it.score);
+        fprintf(pred, "%lu,%d,%ld,%d,%.6f,%d,%.6f,%d,%.6f\n", (unsigned long)idx, it.stream,
+                GST_BUFFER_PTS_IS_VALID(b) ? (long)GST_BUFFER_PTS(b) : -1L, it.cls[0], it.score[0],
+                it.cls[1], it.score[1], it.cls[2], it.score[2]);
       }
     for (auto& it : items) {
       if (it.f.sample) sources[it.stream]->release(it.f);  // also unrefs the sample
@@ -395,8 +398,8 @@ int main(int argc, char** argv) {
              rec.ms[kProcess], rec.ms[kLatency]);
       for (int j = 0; j < std::min(n, 4); ++j) {
         const auto& it = items[j];
-        const char* name = it.cls < int(labels.size()) ? labels[it.cls].c_str() : "";
-        printf("| s%d %d %s %.3f ", it.stream, it.cls, name, it.score);
+        const char* name = it.cls[0] < int(labels.size()) ? labels[it.cls[0]].c_str() : "";
+        printf("| s%d %d %s %.3f ", it.stream, it.cls[0], name, it.score[0]);
       }
       printf("%s\n", n > 4 ? "| ..." : "");
     }

@@ -15,7 +15,7 @@ struct NvBufSurface;
 enum class MemMode { kNvmm, kCpu };
 
 struct SourceConfig {
-  std::string spec;  // test | file:PATH | image:PATH | csi:N | usb:/dev/videoN | rtsp:URL | pipeline:GST
+  std::string spec;  // test | file:PATH | image:PATH | csi:N | usb:/dev/videoN | mjpeg:/dev/videoN[@WxH] | rtsp:URL | pipeline:GST
   int width = 224;   // VIC scales to the network input size
   int height = 224;
   MemMode mem = MemMode::kNvmm;
