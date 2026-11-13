@@ -1,8 +1,26 @@
 # rt-video-infer
 
+[![CI](https://github.com/blipblop67/rt-video-infer/actions/workflows/ci.yml/badge.svg)](https://github.com/blipblop67/rt-video-infer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Real-time C++ video inference on NVIDIA Jetson: **GStreamer (NVDEC + VIC) → CUDA preprocess →
 TensorRT 10**, with per-stage profiling. Handles one or many streams, batched into one inference
 per iteration.
+
+**Highlights** (ResNet50 FP16 on a Jetson Orin Nano Super; details in [Benchmarks](#benchmarks)):
+- **8 × 1080p30 H.264 streams in real time with zero dropped frames**, at 12.7 W. The hardware
+  video decoder, not the GPU, sets the stream limit.
+- **Batched inference at 1.3 ms per frame, with +40% throughput** over one frame at a time when
+  the GPU is the bottleneck (551 vs 392 FPS). This comes from a multi-profile TensorRT engine
+  with each batch range tuned separately, so a single stream loses nothing.
+- **Live USB camera at 30 FPS with 56 ms from camera to result**. MJPEG is decoded on the hardware
+  JPEG engine and frames reach CUDA without a copy.
+- **Measured, not assumed**: per-stage CUDA-event timing, p50/p99 percentiles, drop counters,
+  tegrastats power and GPU logging, and Nsight Systems ranges. Each optimisation in the
+  README is backed by before/after numbers.
+- **Verified**: predictions were checked frame by frame against single-stream reference runs,
+  including a test that batched frames never land in another stream's slot. Pure logic is unit
+  tested in CI.
 
 ![Live USB camera classification on a Jetson Orin Nano Super](assets/demo_usb_camera.gif)
 
@@ -87,6 +105,20 @@ The engine's input size decides the VIC output size. The engine's I/O tensor typ
 fp16) decide what the preprocess kernel writes. Any single-input, single-output NCHW
 classifier works; set `--mean/--std` to match how it was trained.
 
+## Tests
+
+```bash
+ctest --test-dir build --output-on-failure                     # after the normal build
+cmake -S . -B build-ci -DRTINFER_BUILD_APP=OFF && cmake --build build-ci && ./build-ci/unit_tests   # no Jetson needed
+```
+
+The pipeline logic that needs no GPU is kept in a small dependency-free core: source-spec
+parsing, percentile statistics, top-K selection, and the choice of TensorRT optimization profile
+(including padding a batch up to a profile's minimum). It has 27 unit tests, which CI runs on
+every push. GPU, codec and camera behaviour can't run on GitHub's runners, so it is checked on
+the device instead: frame-by-frame prediction matching against reference runs, as described
+under Benchmarks.
+
 ## Profiling
 
 | Layer | Tool | What you get |
@@ -125,7 +157,9 @@ For live sources (camera, RTSP, `test`, `image:`) this is capture-to-result late
 with sync, appsink holds each buffer until its PTS, so the number shows only the processing after
 release. It is not recorded with `--no-sync`.
 
-## Results (ResNet50 fp16, 224×224, 1080p30 H.264 file, Orin Nano Super, MAXN_SUPER)
+## Benchmarks
+
+### Single stream (ResNet50 fp16, 224×224, 1080p30 H.264 file, Orin Nano Super, MAXN_SUPER)
 
 From `scripts/bench_all.sh models/ResNet50_fp16.engine`. Times are means in ms, except the p99 column.
 
@@ -156,7 +190,7 @@ Findings:
   load varies. That variation shows up mainly in the small preprocess kernel and in p99 times. Run
   the Jetson headless (multi-user.target) for repeatable numbers.
 
-## Multi-stream results (ResNet50 fp16, Orin Nano Super)
+### Multi-stream (ResNet50 fp16, Orin Nano Super)
 
 Three engines are compared:
 - "multi-profile" uses `ResNet50_fp16_p1-4-8.engine`, with one enqueue per iteration on the
@@ -241,6 +275,12 @@ src/preprocess.cu  RGBA→NCHW normalize kernel (fp32/fp16)
 src/trt_engine.*   TensorRT 10 engine loader (named tensors, fixed batch or multi-profile dynamic batch)
 src/profiler.*     per-stage stats, CSV/JSON, NVTX helpers
 src/main.cpp       CLI, multi-stream batch gatherer, per-batch loop
+src/source_spec.*  source spec → GStreamer pipeline string        ┐ dependency-free core
+src/stats.h        mean / nearest-rank percentiles                │ ("rtcore"), unit tested
+src/topk.h         single-pass top-K selection                    │ in CI on any machine
+src/batch_plan.h   optimization-profile choice and row padding    ┘
+tests/             unit tests (tiny built-in harness, run with ctest)
+.github/workflows/ CI: core + tests with g++ and clang++, script syntax checks
 assets/            README demo (GIF inline, MP4 full quality)
 scripts/           engine builds (trtexec + dynamic-batch Python builder), test clips, demo recorder/renderer,
                    tegrastats/nsys wrapper, benchmark matrices
