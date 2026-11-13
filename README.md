@@ -159,6 +159,10 @@ release. It is not recorded with `--no-sync`.
 
 ## Benchmarks
 
+The raw output of every run below (per-stage JSON, per-batch CSV and the tegrastats log with
+timestamps) is in [`benchmarks/`](benchmarks/), together with the exact commands.
+`python3 scripts/summarize_benchmarks.py` recomputes these tables from those files.
+
 ### Single stream (ResNet50 fp16, 224×224, 1080p30 H.264 file, Orin Nano Super, MAXN_SUPER)
 
 From `scripts/bench_all.sh models/ResNet50_fp16.engine`. Times are means in ms, except the p99 column.
@@ -267,6 +271,17 @@ Findings:
   of launching once per frame.
 - INT8 with a calibration cache (`trtexec --int8 --calib=…`).
 
+## Development notes
+
+Built in November 2026 on a Jetson Orin Nano Super, with help from an AI coding assistant. I set
+the goals, ran every build, benchmark and recording on my own hardware, and checked the results;
+the raw data is in [`benchmarks/`](benchmarks/).
+
+The first commit is the working pipeline as it stood after the initial build-out. Later changes
+(camera support, license, the dependency-free core with unit tests, CI, README) were committed
+as separate steps, several of them back to back from prepared changes. Further work is committed
+as it happens.
+
 ## Layout
 
 ```
@@ -280,6 +295,7 @@ src/stats.h        mean / nearest-rank percentiles                │ ("rtcore")
 src/topk.h         single-pass top-K selection                    │ in CI on any machine
 src/batch_plan.h   optimization-profile choice and row padding    ┘
 tests/             unit tests (tiny built-in harness, run with ctest)
+benchmarks/        raw run outputs behind the README tables, with commands and caveats
 .github/workflows/ CI: core + tests with g++ and clang++, script syntax checks
 assets/            README demo (GIF inline, MP4 full quality)
 scripts/           engine builds (trtexec + dynamic-batch Python builder), test clips, demo recorder/renderer,
