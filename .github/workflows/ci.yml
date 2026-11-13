@@ -15,7 +15,7 @@ jobs:
       matrix:
         compiler: [g++, clang++]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure (core + tests only)
         run: cmake -S . -B build -DRTINFER_BUILD_APP=OFF -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
       - name: Build
@@ -26,7 +26,7 @@ jobs:
   scripts:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Shell syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: Python syntax
