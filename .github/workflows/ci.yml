@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# GitHub's runners have no Jetson GPU, TensorRT or NVIDIA GStreamer plugins, so CI builds the
+# dependency-free core and runs its unit tests, and syntax-checks the scripts. The full app is
+# built and benchmarked on the device (see README).
+jobs:
+  unit-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (core + tests only)
+        run: cmake -S . -B build -DRTINFER_BUILD_APP=OFF -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  scripts:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: Python syntax
+        run: python3 -m py_compile scripts/*.py
